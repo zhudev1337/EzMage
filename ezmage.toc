@@ -1,0 +1,8 @@
+## Interface: 11200
+## Title: EzMage
+## Notes: Mage-specific addon for tracking procs and cooldowns
+## Author: Zhudev
+## Version: 1.0
+## SavedVariables: EzMageDB
+
+EzMage.lua
