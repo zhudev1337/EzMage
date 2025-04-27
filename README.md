@@ -8,6 +8,7 @@ A Twow / World of Warcraft 1.12 addon designed specifically for mages to track i
 - Tracks important mage procs and buffs
 - Cooldown tracking for mage abilities
 - Clean and minimal UI
+- type ```/ezmage config``` or ```/ezmage``` for some options
 
 ## Installation
 
