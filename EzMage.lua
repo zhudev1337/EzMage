@@ -32,6 +32,7 @@ local activeBuffs = {}
 
 -- Add this near the top with other tables
 local availableSpells = {}
+local isTestMode = false
 
 -- Make main frame globally accessible
 EzMageFrame = EzMage
@@ -143,6 +144,8 @@ end)
 
 -- Check buff-based procs
 function auraFrame:CheckProcs()
+    if isTestMode then return end
+    
     for _, icon in ipairs(EzMage.icons) do
         local ability = icon.ability
         if ability.isProc and not ability.isActionBased then
@@ -250,6 +253,8 @@ end
 
 -- Check action-based procs
 function actionFrame:CheckActionProcs()
+    if isTestMode then return end
+    
     for _, icon in ipairs(EzMage.icons) do
         local ability = icon.ability
         if ability.isProc and ability.isActionBased then
@@ -383,17 +388,72 @@ local abilities = {
     }
 }
 
+-- Function to check spellbook availability
 local function UpdateAvailableSpells()
+    -- Reset all spells to unavailable first
     for _, ability in ipairs(abilities) do
-        if not ability.isProc and not ability.isActionBased then
-            availableSpells[ability.name] = false
-            for i = 1, 1000 do
-                local name, rank = GetSpellName(i, "spell")
-                if name and name == ability.name then
-                    availableSpells[ability.name] = true
+        availableSpells[ability.name] = false
+    end
+    
+    -- Check each spell in the spellbook
+    for i = 1, 1000 do
+        local name, rank = GetSpellName(i, "spell")
+        if name then
+            -- Check if this spell is in our abilities list
+            for _, ability in ipairs(abilities) do
+                if name == ability.name then
+                    -- For non-proc, non-action-based abilities, mark as available
+                    if not ability.isProc and not ability.isActionBased then
+                        availableSpells[ability.name] = true
+                    end
                     break
                 end
             end
+        end
+    end
+end
+
+-- Function to resize EzMage frame based on available spells
+local function ResizeEzMageFrame()
+    local iconSize = 32
+    local iconSpacing = 3  -- Space between icons
+    local edgePadding = 5  -- Padding on left and right edges
+    local topPadding = 15   -- Padding at top for title
+    local bottomPadding = 5 -- Padding at bottom for timers
+    local rowSpacing = 5   -- Space between rows
+    
+    -- Count available spells
+    local availableCount = 0
+    for _, ability in ipairs(abilities) do
+        if ability.isProc or ability.isActionBased or availableSpells[ability.name] then
+            availableCount = availableCount + 1
+        end
+    end
+    
+    -- Calculate number of icons per row
+    local iconsPerRow = math.ceil(availableCount / EzMageDB.rows)
+    
+    -- Calculate frame dimensions
+    local totalWidth = edgePadding * 2 + (iconsPerRow * (iconSize + iconSpacing)) - iconSpacing
+    local totalHeight = topPadding + (EzMageDB.rows * (iconSize + rowSpacing)) - rowSpacing + bottomPadding
+    
+    -- Set frame size
+    EzMage:SetWidth(totalWidth)
+    EzMage:SetHeight(totalHeight)
+    
+    -- Reposition icons
+    local iconIndex = 1
+    for i, ability in ipairs(abilities) do
+        if ability.isProc or ability.isActionBased or availableSpells[ability.name] then
+            local row = math.floor((iconIndex-1) / iconsPerRow)
+            local col = math.mod(iconIndex-1, iconsPerRow)
+            
+            EzMage.icons[i]:ClearAllPoints()
+            EzMage.icons[i]:SetPoint("TOPLEFT", EzMage, "TOPLEFT", 
+                edgePadding + col * (iconSize + iconSpacing),
+                -topPadding - row * (iconSize + rowSpacing))
+            
+            iconIndex = iconIndex + 1
         end
     end
 end
@@ -554,6 +614,9 @@ EzMage:SetScript("OnEvent", function()
         EzMage:UpdateAuras()
         this:UpdateCooldowns()
         
+        -- Resize frame based on available spells
+        ResizeEzMageFrame()
+        
         -- Register events for aura frame
         auraFrame:RegisterEvent("PLAYER_AURAS_CHANGED")
         auraFrame:Show()
@@ -619,6 +682,7 @@ EzMage:SetScript("OnEvent", function()
         EzMage:UpdateAuras()
     elseif event == "SPELLS_CHANGED" then
         UpdateAvailableSpells()
+        ResizeEzMageFrame()
         EzMage:UpdateAuras()
     end
 end)
@@ -629,6 +693,8 @@ updateFrame:SetScript("OnShow", function()
 end)
 
 updateFrame:SetScript("OnUpdate", function()
+    if isTestMode then return end  -- Skip updates during test mode
+    
     if not this.startTime then this.startTime = GetTime() end
     local plus = this.UPDATE_INTERVAL
     local gt = GetTime() * 1000
@@ -752,10 +818,13 @@ end
 
 -- Update auras
 function EzMage:UpdateAuras()
+    if isTestMode then return end
+    
     for _, icon in ipairs(self.icons) do
         local ability = icon.ability
         local found = false
         local currentBuffIndex = -1
+        local shouldContinue = false
         
         -- Only process non-proc abilities
         if not ability.isProc then
@@ -765,7 +834,10 @@ function EzMage:UpdateAuras()
                 icon.glow:SetAlpha(0)
                 icon.activeTimer:SetText("")
                 icon.texture:SetVertexColor(1, 1, 1)
-            else
+                shouldContinue = true
+            end
+            
+            if not shouldContinue then
                 -- First check if we already have this buff tracked
                 if activeBuffs[ability.name] then
                     currentBuffIndex = activeBuffs[ability.name].index
@@ -915,7 +987,7 @@ local function CreateOptionsFrame()
     if not EzMageOptionsFrame then
         local f = CreateFrame("Frame", "EzMageOptionsFrame", UIParent)
         f:SetWidth(300)
-        f:SetHeight(250)  -- Increased height for new options
+        f:SetHeight(300)  -- Increased height for new test button
         f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
         f:SetBackdrop({
             bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -934,7 +1006,7 @@ local function CreateOptionsFrame()
 
         -- Title
         local titleFrame = CreateFrame("Frame", nil, f)
-        titleFrame:SetPoint("BOTTOM", f, "TOP", 0, 0)  -- Changed from TOP to BOTTOM
+        titleFrame:SetPoint("BOTTOM", f, "TOP", 0, 0)
         titleFrame:SetWidth(256)
         titleFrame:SetHeight(64)
 
@@ -949,7 +1021,8 @@ local function CreateOptionsFrame()
         -- Store pending changes
         local pendingChanges = {
             isLocked = EzMageDB.isLocked,
-            rows = EzMageDB.rows
+            rows = EzMageDB.rows,
+            hideBackground = EzMageDB.hideBackground
         }
 
         -- Lock/Unlock Checkbox
@@ -1010,9 +1083,58 @@ local function CreateOptionsFrame()
             end
         end)
 
+        -- Test Icons Button
+        local testButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+        testButton:SetPoint("TOP", rowsSlider, "BOTTOM", 0, -20)
+        testButton:SetWidth(120)
+        testButton:SetHeight(25)
+        testButton:SetText("Test Icons")
+        testButton:SetScript("OnClick", function()
+            -- Enable test mode
+            isTestMode = true
+            
+            -- Show all icons
+            for _, icon in ipairs(EzMage.icons) do
+                icon:Show()
+                icon.glow:SetAlpha(1)
+                icon.texture:SetVertexColor(1, 1, 1)
+                icon.activeTimer:SetText("TEST")
+                icon.cooldownTimer:SetText("")
+            end
+            
+            -- Create a timer to hide icons after 10 seconds
+            local testTimer = CreateFrame("Frame", nil, UIParent)
+            testTimer:SetScript("OnUpdate", function()
+                if not testTimer.startTime then
+                    testTimer.startTime = GetTime()
+                end
+                
+                if GetTime() - testTimer.startTime >= 10 then
+                    -- Disable test mode
+                    isTestMode = false
+                    
+                    -- Clear test text from all icons
+                    for _, icon in ipairs(EzMage.icons) do
+                        icon.activeTimer:SetText("")
+                    end
+                    
+                    -- Restore normal icon visibility
+                    EzMage:UpdateAuras()
+                    EzMage:UpdateCooldowns()
+                    auraFrame:CheckProcs()
+                    actionFrame:CheckActionProcs()
+                    
+                    -- Properly clean up the test timer
+                    testTimer:SetScript("OnUpdate", nil)
+                    testTimer:Hide()
+                    testTimer = nil
+                end
+            end)
+        end)
+
         -- Reset Position Button
         local resetButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        resetButton:SetPoint("TOP", rowsSlider, "BOTTOM", 0, -20)
+        resetButton:SetPoint("TOP", testButton, "BOTTOM", 0, -10)
         resetButton:SetWidth(120)
         resetButton:SetHeight(25)
         resetButton:SetText("Reset Position")
