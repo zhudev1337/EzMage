@@ -83,7 +83,6 @@ local function UpdateBuffTimer(buffName, remaining)
     if not buffData then
         return
     end
-
     for _, icon in ipairs(EzMage.icons) do
         if icon.ability.name == buffName then
             icon.activeTimer:SetText(FormatTimeText(remaining))
@@ -116,6 +115,11 @@ end
 -- Update or create buff entry
 local function UpdateBuffEntry(ability, buffIndex, duration)
     local currentTime = GetTime()
+    -- If buff already exists, log its current state
+    if activeBuffs[ability.name] then
+        local oldBuff = activeBuffs[ability.name]
+    end
+
     activeBuffs[ability.name] = {
         index = buffIndex,
         duration = duration,
@@ -125,7 +129,6 @@ local function UpdateBuffEntry(ability, buffIndex, duration)
     }
 end
 
--- Timer frame update handler
 timerFrame:SetScript(
     "OnUpdate",
     function()
@@ -156,8 +159,11 @@ function auraFrame:CheckProcs()
             -- First check if we already have this buff tracked
             if activeBuffs[ability.name] then
                 currentBuffIndex = activeBuffs[ability.name].index
-                -- Verify the buff is still active
+                -- Verify the buff is still active, checking both helpful and harmful
                 local buffIndex = GetPlayerBuff(currentBuffIndex, "HELPFUL")
+                if buffIndex < 0 then
+                    buffIndex = GetPlayerBuff(currentBuffIndex, "HARMFUL")
+                end
                 if buffIndex >= 0 then
                     local buffTexture = GetPlayerBuffTexture(buffIndex)
                     if buffTexture == ability.texture then
@@ -168,6 +174,7 @@ function auraFrame:CheckProcs()
 
             -- If not found in active buffs, check all buffs
             if not found then
+                -- Check helpful buffs first
                 for i = 0, 31 do
                     local buffIndex = GetPlayerBuff(i, "HELPFUL")
                     if buffIndex >= 0 then
@@ -193,6 +200,38 @@ function auraFrame:CheckProcs()
                                 UpdateBuffEntry(ability, buffIndex, duration)
                             end
                             break
+                        end
+                    end
+                end
+
+                -- If not found in helpful buffs, check harmful buffs
+                if not found then
+                    for i = 0, 31 do
+                        local buffIndex = GetPlayerBuff(i, "HARMFUL")
+                        if buffIndex >= 0 then
+                            local buffTexture = GetPlayerBuffTexture(buffIndex)
+                            local altMatches = false
+
+                            if ability.alternateTextures then
+                                for _, altTexture in ipairs(ability.alternateTextures) do
+                                    if buffTexture == altTexture then
+                                        altMatches = true
+                                        break
+                                    end
+                                end
+                            end
+
+                            if buffTexture == ability.texture or altMatches then
+                                found = true
+                                currentBuffIndex = buffIndex
+                                local duration = GetPlayerBuffTimeLeft(buffIndex)
+
+                                -- Update buff tracking
+                                if duration and duration > 0 then
+                                    UpdateBuffEntry(ability, buffIndex, duration)
+                                end
+                                break
+                            end
                         end
                     end
                 end
@@ -397,11 +436,15 @@ function EzMage:Init()
         }
     )
 
-    -- Set background color based on lock state
-    if EzMageDB.isLocked then
-        self:SetBackdropColor(0, 0, 0, 0.4) -- Lighter background when locked
+    -- Set background color based on lock state and hide background setting
+    if EzMageDB.hideBackground then
+        self:SetBackdropColor(0, 0, 0, 0) -- Fully transparent background
     else
-        self:SetBackdropColor(0, 0, 0, 0.8) -- Darker background when unlocked
+        if EzMageDB.isLocked then
+            self:SetBackdropColor(0, 0, 0, 0.4) -- Lighter background when locked
+        else
+            self:SetBackdropColor(0, 0, 0, 0.8) -- Darker background when unlocked
+        end
     end
 
     self:SetMovable(not EzMageDB.isLocked)
@@ -454,6 +497,9 @@ initFrame:SetScript(
             end
             if not EzMageDB.rows then
                 EzMageDB.rows = 1
+            end
+            if not EzMageDB.hideBackground then
+                EzMageDB.hideBackground = false
             end
 
             EzMage:Init()
@@ -529,7 +575,7 @@ EzMage:SetScript(
 
             -- Initialize addon for mage
             this:SetupUI()
-            this:UpdateAuras()
+            EzMage:UpdateAuras()
             this:UpdateCooldowns()
 
             -- Register events for aura frame
@@ -549,6 +595,7 @@ EzMage:SetScript(
 
             -- Register aura change event for non-proc buffs
             this:RegisterEvent("PLAYER_AURAS_CHANGED")
+            this:RegisterEvent("UNIT_AURA")
 
             -- Register spell change event
             this:RegisterEvent("SPELLS_CHANGED")
@@ -560,14 +607,43 @@ EzMage:SetScript(
 
             -- Unregister PLAYER_LOGIN after we're done with it
             this:UnregisterEvent("PLAYER_LOGIN")
-            DEFAULT_CHAT_FRAME:AddMessage("EzMage: Unregistered PLAYER_LOGIN event", 1.0, 1.0, 0.0)
         elseif event == "SPELL_UPDATE_COOLDOWN" then
             this:UpdateCooldowns()
-        elseif event == "PLAYER_AURAS_CHANGED" then
-            this:UpdateAuras()
+            -- Check for buff durations when cooldowns update
+            for _, ability in ipairs(abilities) do
+                if not ability.isProc and not ability.isActionBased then
+                    -- Find the buff index for this ability
+                    for i = 0, 31 do
+                        local buffIndex = GetPlayerBuff(i, "HELPFUL")
+                        if buffIndex >= 0 then
+                            local buffTexture = GetPlayerBuffTexture(buffIndex)
+                            local altMatches = false
+
+                            if ability.alternateTextures then
+                                for _, altTexture in ipairs(ability.alternateTextures) do
+                                    if buffTexture == altTexture then
+                                        altMatches = true
+                                        break
+                                    end
+                                end
+                            end
+
+                            if buffTexture == ability.texture or altMatches then
+                                local duration = GetPlayerBuffTimeLeft(buffIndex)
+                                if duration and duration > 0 then
+                                    UpdateBuffEntry(ability, buffIndex, duration)
+                                end
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        elseif event == "PLAYER_AURAS_CHANGED" or (event == "UNIT_AURA" and arg1 == "player") then
+            EzMage:UpdateAuras()
         elseif event == "SPELLS_CHANGED" then
             UpdateAvailableSpells()
-            this:UpdateAuras()
+            EzMage:UpdateAuras()
         end
     end
 )
@@ -637,8 +713,8 @@ function EzMage:CreateAbilityIcon(ability, index)
     glow:SetBlendMode("ADD")
     glow:SetAlpha(0)
     glow:SetPoint("CENTER", icon, "CENTER", 0, 0)
-    glow:SetWidth(48)
-    glow:SetHeight(48)
+    glow:SetWidth(50)
+    glow:SetHeight(50)
     glow:SetVertexColor(0.5, 0.8, 1.0)
     glow:SetTexCoord(0, 1, 0, 1) -- Ensure full texture is shown
 
@@ -667,7 +743,6 @@ end
 
 -- Setup UI elements
 function EzMage:SetupUI()
-    DEFAULT_CHAT_FRAME:AddMessage("EzMage: Setting up UI", 1.0, 1.0, 0.0)
     self.icons = {}
 
     local iconSize = 32
@@ -778,6 +853,10 @@ function EzMage:UpdateAuras()
                     icon:Show()
                     icon.glow:SetAlpha(1)
                     icon.texture:SetVertexColor(1, 1, 1) -- Reset color to normal
+                    local duration = GetPlayerBuffTimeLeft(currentBuffIndex)
+                    if duration and duration > 0 then
+                        UpdateBuffEntry(ability, buffIndex, duration)
+                    end
                 else
                     -- For non-proc, non-action-based abilities, show the icon but greyed out
                     if not ability.isActionBased then
@@ -944,13 +1023,31 @@ local function CreateOptionsFrame()
             end
         )
 
+        -- Hide Background Checkbox
+        local hideBgCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+        hideBgCheck:SetPoint("TOPLEFT", lockCheck, "BOTTOMLEFT", 0, -10)
+        hideBgCheck:SetWidth(24)
+        hideBgCheck:SetHeight(24)
+
+        local hideBgLabel = hideBgCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        hideBgLabel:SetPoint("LEFT", hideBgCheck, "RIGHT", 4, 0)
+        hideBgLabel:SetText("Hide Background")
+
+        hideBgCheck:SetChecked(pendingChanges.hideBackground)
+        hideBgCheck:SetScript(
+            "OnClick",
+            function()
+                pendingChanges.hideBackground = hideBgCheck:GetChecked()
+            end
+        )
+
         -- Rows Slider
         local rowsLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        rowsLabel:SetPoint("TOPLEFT", 20, -70)
+        rowsLabel:SetPoint("TOPLEFT", hideBgCheck, "BOTTOMLEFT", 0, -20)
         rowsLabel:SetText("Number of Rows:")
 
         local rowsSlider = CreateFrame("Slider", "EzMageRowsSlider", f, "OptionsSliderTemplate")
-        rowsSlider:SetPoint("TOPLEFT", 20, -100)
+        rowsSlider:SetPoint("TOPLEFT", rowsLabel, "BOTTOMLEFT", 0, -10)
         rowsSlider:SetWidth(260)
         rowsSlider:SetMinMaxValues(1, 3)
         rowsSlider:SetValueStep(1)
@@ -983,7 +1080,7 @@ local function CreateOptionsFrame()
 
         -- Reset Position Button
         local resetButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        resetButton:SetPoint("TOP", 0, -140)
+        resetButton:SetPoint("TOP", rowsSlider, "BOTTOM", 0, -20)
         resetButton:SetWidth(120)
         resetButton:SetHeight(25)
         resetButton:SetText("Reset Position")
@@ -1001,7 +1098,7 @@ local function CreateOptionsFrame()
 
         -- Confirm Button
         local confirmButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        confirmButton:SetPoint("BOTTOMLEFT", 20, 10)
+        confirmButton:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 10)
         confirmButton:SetWidth(120)
         confirmButton:SetHeight(25)
         confirmButton:SetText("Confirm")
@@ -1011,6 +1108,7 @@ local function CreateOptionsFrame()
                 -- Apply pending changes
                 EzMageDB.isLocked = pendingChanges.isLocked
                 EzMageDB.rows = pendingChanges.rows
+                EzMageDB.hideBackground = pendingChanges.hideBackground
 
                 -- First hide all icons
                 for _, icon in ipairs(EzMage.icons) do
@@ -1061,7 +1159,7 @@ local function CreateOptionsFrame()
 
         -- Close Button
         local closeButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-        closeButton:SetPoint("BOTTOMRIGHT", -20, 10)
+        closeButton:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 10)
         closeButton:SetWidth(120)
         closeButton:SetHeight(25)
         closeButton:SetText("Close")
@@ -1087,7 +1185,7 @@ SlashCmdList["EZMAGE"] = function(msg)
             EzMageDB.position = {x = 0, y = 0}
             DEFAULT_CHAT_FRAME:AddMessage("EzMage position reset", 1.0, 1.0, 0.0)
         end
-    elseif msg == "config" then
+    elseif msg == "config" or msg == "" then
         local f = CreateOptionsFrame()
         f:Show()
     end
